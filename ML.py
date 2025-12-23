@@ -1,236 +1,246 @@
-import pandas as pd
+# =====================================
+# IMPORTS
+# =====================================
 import numpy as np
+import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
+from sklearn.model_selection import train_test_split, cross_validate
 from sklearn.pipeline import Pipeline
-from sklearn.linear_model import Ridge
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    median_absolute_error
+)
+
+# MODELS
+from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import (
+    RandomForestRegressor,
+    ExtraTreesRegressor,
+    GradientBoostingRegressor,
+    HistGradientBoostingRegressor
+)
+from sklearn.svm import SVR
 
 
-class MLpipeline:
-    def __init__(
-        self,
-        model,
-        data,
-        target_col: str,
-        test_size: float = 0.2,
-        random_state: int = 42
-    ):
-        self.model = model
-        self.target_col = target_col
-        self.test_size = test_size
+# =====================================
+# MAIN CLASS
+# =====================================
+class EndToEndRegressionPipeline:
+
+    def __init__(self, data: pd.DataFrame, target: str, random_state=42):
+        self.data = data
+        self.target = target
         self.random_state = random_state
 
-        self.preprocessor = None
-        self.pipeline = None
-        self.y_pred = None
-        self.results = {}
+        self.X = data.drop(columns=[target])
+        self.y = data[target]
 
-        self._load_data(data)
+        self.results_df = None
+        self.best_models = {}
 
-    # ---------------- LOAD DATA ----------------
-    def _load_data(self, data):
-        if isinstance(data, str):
-            df = pd.read_csv(data)
-        elif isinstance(data, pd.DataFrame):
-            df = data.copy()
-        else:
-            raise ValueError("Data must be a CSV path or a pandas DataFrame")
+        self.preprocessor = self._build_preprocessor()
+        self.models = self._build_models()
 
-        self.X = df.drop(columns=[self.target_col])
-        self.y = df[self.target_col]
+    # =====================================
+    # 1️⃣ EDA
+    # =====================================
+    def eda(self):
+        print("\n===== DATA OVERVIEW =====")
+        print(self.data.head())
+        print("\n===== INFO =====")
+        self.data.info()
 
-    # ---------------- EDA ----------------
-    def EDA(self):
-        print("\nFirst rows:")
-        print(self.X.head())
+        print("\n===== DESCRIBE =====")
+        print(self.data.describe())
 
-        print("\nInfo:")
-        self.X.info()
+        print("\n===== MISSING VALUES =====")
+        print(self.data.isnull().sum())
 
-        print("\nDescribe:")
-        print(self.X.describe(include="all"))
-
-        print("\nMissing values:")
-        print(self.X.isnull().sum())
-
-        num_df = self.X.select_dtypes(include=[np.number])
-        if not num_df.empty:
-            plt.figure(figsize=(12, 8))
-            sns.heatmap(num_df.corr(), annot=True, cmap="coolwarm")
-            plt.title("Correlation Matrix")
-            plt.show()
-
+        # Target distribution
         plt.figure()
         sns.histplot(self.y, kde=True)
         plt.title("Target Distribution")
         plt.show()
 
-    # ---------------- FEATURE ENGINEERING ----------------
-    def FeatureEngineering_and_DataCleaning(self):
-        numeric_features = self.X.select_dtypes(include=[np.number]).columns
-        categorical_features = self.X.select_dtypes(include=["object", "category"]).columns
+        # Correlation (numeric only)
+        num_df = self.data.select_dtypes(include=np.number)
+        if num_df.shape[1] > 1:
+            plt.figure(figsize=(8,6))
+            sns.heatmap(num_df.corr(), annot=True, cmap="coolwarm")
+            plt.title("Correlation Heatmap")
+            plt.show()
 
-        numeric_transformer = Pipeline(steps=[
+    # =====================================
+    # 2️⃣ FEATURE ENGINEERING & PREPROCESS
+    # =====================================
+    def _build_preprocessor(self):
+        num_cols = self.X.select_dtypes(include=["int64", "float64"]).columns
+        cat_cols = self.X.select_dtypes(include=["object", "category"]).columns
+
+        num_pipe = Pipeline([
             ("imputer", SimpleImputer(strategy="mean")),
-            ("scaler", StandardScaler()) 
+            ("scaler", StandardScaler())
         ])
 
-        # OneHotEncoder parameter name differs across sklearn versions
-        try:
-            ohe = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
-        except TypeError:
-            ohe = OneHotEncoder(handle_unknown="ignore", sparse=False)
-
-        categorical_transformer = Pipeline(steps=[
+        cat_pipe = Pipeline([
             ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("onehot", ohe)
+            ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False))
         ])
 
-        self.preprocessor = ColumnTransformer(transformers=[
-            ("num", numeric_transformer, numeric_features),
-            ("cat", categorical_transformer, categorical_features)
+        return ColumnTransformer([
+            ("num", num_pipe, num_cols),
+            ("cat", cat_pipe, cat_cols)
         ])
 
-    # ---------------- TRAIN & EVALUATE ----------------
-    def ModelTraining_and_Evaluation(self, cv: int = 5):
-        if self.preprocessor is None:
-            self.FeatureEngineering_and_DataCleaning()
+    # =====================================
+    # 3️⃣ MODELS
+    # =====================================
+    def _build_models(self):
+        return {
+            "Linear": LinearRegression(),
+            "Ridge": Ridge(alpha=1.0),
+            "Lasso": Lasso(alpha=0.01),
+            "ElasticNet": ElasticNet(alpha=0.01, l1_ratio=0.5),
+            "DecisionTree": DecisionTreeRegressor(random_state=self.random_state),
+            "RandomForest": RandomForestRegressor(n_estimators=300, random_state=self.random_state),
+            "ExtraTrees": ExtraTreesRegressor(n_estimators=300, random_state=self.random_state),
+            "GradientBoosting": GradientBoostingRegressor(),
+            "HistGradientBoosting": HistGradientBoostingRegressor(),
+            "SVR": SVR(kernel="rbf")
+        }
 
-        self.pipeline = Pipeline(steps=[
-            ("preprocessor", self.preprocessor),
-            ("model", self.model)
+    # =====================================
+    # 4️⃣ MODEL EVALUATION
+    # =====================================
+    def evaluate_models(self, cv=5):
+        scoring = {
+            "MAE": "neg_mean_absolute_error",
+            "MSE": "neg_mean_squared_error",
+            "R2": "r2",
+            "MedianAE": "neg_median_absolute_error"
+        }
+
+        records = []
+
+        for name, model in self.models.items():
+            pipe = Pipeline([
+                ("prep", self.preprocessor),
+                ("model", model)
+            ])
+
+            scores = cross_validate(pipe, self.X, self.y, cv=cv, scoring=scoring)
+
+            mae = -scores["test_MAE"].mean()
+            mse = -scores["test_MSE"].mean()
+            rmse = np.sqrt(mse)
+            r2 = scores["test_R2"].mean()
+            medae = -scores["test_MedianAE"].mean()
+
+            records.append({
+                "Model": name,
+                "MAE": mae,
+                "MSE": mse,
+                "RMSE": rmse,
+                "R2": r2,
+                "MedianAE": medae
+            })
+
+        self.results_df = pd.DataFrame(records).sort_values("RMSE")
+        return self.results_df
+
+    # =====================================
+    # 5️⃣ SELECT BEST MODELS
+    # =====================================
+    def select_best_models(self, top_n=3):
+        best_names = self.results_df.head(top_n)["Model"].tolist()
+        for name in best_names:
+            self.best_models[name] = self.models[name]
+
+    # =====================================
+    # 6️⃣ SENIOR-LEVEL DIAGNOSTICS
+    # =====================================
+    def diagnostics(self, model_name):
+        model = self.best_models[model_name]
+
+        pipe = Pipeline([
+            ("prep", self.preprocessor),
+            ("model", model)
         ])
 
         X_train, X_test, y_train, y_test = train_test_split(
-            self.X,
-            self.y,
-            test_size=self.test_size,
-            random_state=self.random_state
+            self.X, self.y, test_size=0.2, random_state=self.random_state
         )
 
-        self.X_train, self.X_test = X_train, X_test
-        self.y_train, self.y_test = y_train, y_test
+        pipe.fit(X_train, y_train)
+        preds = pipe.predict(X_test)
+        residuals = y_test - preds
 
-        cv_scores = cross_val_score(
-            self.pipeline,
-            X_train,
-            y_train,
-            cv=cv,
-            scoring="neg_mean_squared_error"
-        )
-
-        # convert negative MSE scores to positive MSE for reporting
-        cv_mse_scores = -cv_scores
-
-        self.pipeline.fit(X_train, y_train)
-        self.y_pred = self.pipeline.predict(X_test)
-
-        mse = mean_squared_error(y_test, self.y_pred)
-
-        self.results = {
-            "cv_mse_mean": float(np.mean(cv_mse_scores)),
-            "cv_mse_std": float(np.std(cv_mse_scores)),
-            "test_rmse": float(np.sqrt(mse)),
-            "test_mae": float(mean_absolute_error(y_test, self.y_pred)),
-            "test_r2": float(r2_score(y_test, self.y_pred))
-        }
-
-        print("\nResults:")
-        for k, v in self.results.items():
-            print(f"{k}: {v}")
-
-        return self.results
-
-    # ---------------- MODEL TUNING ----------------
-    def Model_Tuning(self, param_grid: dict, cv: int = 5):
-        # ensure pipeline exists
-        if self.pipeline is None:
-            if self.preprocessor is None:
-                self.FeatureEngineering_and_DataCleaning()
-            self.pipeline = Pipeline(steps=[("preprocessor", self.preprocessor), ("model", self.model)])
-
-        if not hasattr(self, "X_train"):
-            raise RuntimeError("Call ModelTraining_and_Evaluation before Model_Tuning to create train/test splits.")
-
-        grid = GridSearchCV(
-            self.pipeline,
-            param_grid=param_grid,
-            cv=cv,
-            scoring="neg_mean_squared_error",
-            n_jobs=-1
-        )
-
-        grid.fit(self.X_train, self.y_train)
-
-        self.pipeline = grid.best_estimator_
-        self.y_pred = self.pipeline.predict(self.X_test)
-
-        mse = mean_squared_error(self.y_test, self.y_pred)
-
-        self.results.update({
-            "tuned_rmse": float(np.sqrt(mse)),
-            "tuned_r2": float(r2_score(self.y_test, self.y_pred)),
-            "best_params": grid.best_params_
-        })
-
-        print("\nTuned Results:")
-        for k, v in self.results.items():
-            print(f"{k}: {v}")
-
-        return self.results
-
-    # ---------------- PLOTS ----------------
-    def plot_results(self):
-        # convert to numpy arrays for safe numeric operations
-        y_true = np.array(self.y_test)
-        y_pred = np.array(self.y_pred)
-
-        if y_true.shape != y_pred.shape:
-            raise ValueError("Shape mismatch between y_test and y_pred for plotting.")
-
-        residuals = y_true - y_pred
-
-        plt.figure()
-        plt.scatter(y_true, y_pred, alpha=0.6)
-        x_min = float(np.min(y_true))
-        x_max = float(np.max(y_true))
-        x_line = np.array([x_min, x_max], dtype=float)
-        plt.plot(x_line, x_line, "r--")
+        # Actual vs Predicted
+        plt.figure(figsize=(6,6))
+        plt.scatter(y_test, preds, alpha=0.35)
+        plt.plot([y_test.min(), y_test.max()],
+                 [y_test.min(), y_test.max()], 'r--')
         plt.xlabel("Actual")
         plt.ylabel("Predicted")
-        plt.title("Actual vs Predicted")
+        plt.title(f"{model_name} | Actual vs Predicted")
         plt.show()
 
+        # Residual Distribution
         plt.figure()
         sns.histplot(residuals, kde=True)
-        plt.title("Residuals Distribution")
+        plt.title(f"{model_name} | Residual Distribution")
         plt.show()
 
+        # Residual vs Predicted
+        plt.figure()
+        plt.scatter(preds, residuals, alpha=0.35)
+        plt.axhline(0, linestyle="--", color="red")
+        plt.xlabel("Predicted")
+        plt.ylabel("Residual")
+        plt.title(f"{model_name} | Residuals vs Predicted")
+        plt.show()
 
-# ---------------- RUN ----------------
+    # =====================================
+    # 7️⃣ SUMMARY
+    # =====================================
+    def summary(self):
+        print("\n===== MODEL COMPARISON TABLE =====\n")
+        print(self.results_df)
+
+"""
+
+• RMSE düşük ama MAE yüksek → büyük hatalar var
+• R² tek başına karar kriteri değildir
+• MAE ≈ MedianAE → stabil model
+• Tree/Boosting → performans
+• Ridge → production güvenliği
+"""
+
+
+# =====================================
+# RUN
+# =====================================
 if __name__ == "__main__":
     data = pd.read_csv("duzenlenmis_cattle_milk_yield.csv")
 
-    model = Ridge()
-
-    ml = MLpipeline(
-        model=model,
+    pipeline = EndToEndRegressionPipeline(
         data=data,
-        target_col="Sut_Verimi_L_gun"
+        target="Sut_Verimi_L_gun"
     )
 
-    ml.EDA()
-    ml.ModelTraining_and_Evaluation(cv=5)
+    pipeline.eda()
+    results = pipeline.evaluate_models(cv=5)
+    pipeline.select_best_models(top_n=3)
+    pipeline.summary()
 
-    param_grid = {
-        "model__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]
-    }
-
-    ml.Model_Tuning(param_grid=param_grid, cv=5)
-    ml.plot_results()
+    for model_name in pipeline.best_models:
+        pipeline.diagnostics(model_name)
